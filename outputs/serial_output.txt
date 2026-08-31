@@ -1,0 +1,47 @@
+=========================================================
+ CSS 311 PDC - Assignment I : PageRank (SERIAL VERSION)
+ Name : <FILL_YOUR_NAME>      Roll No : <FILL_YOUR_ROLL_NO>
+=========================================================
+
+---- Demonstration graph : N = 6 nodes, E = 8 edges ----
+  iter  1 : L1 diff = 0.51944444   PR = [0.2611, 0.1194, 0.3319, 0.1194, 0.0486, 0.1194]
+  iter  2 : L1 diff = 0.29435185   PR = [0.3748, 0.1529, 0.3052, 0.0626, 0.0419, 0.0626]
+  iter  3 : L1 diff = 0.16964255   PR = [0.3199, 0.1932, 0.3497, 0.0517, 0.0339, 0.0517]
+  iter  4 : L1 diff = 0.07276939   PR = [0.3516, 0.1683, 0.3544, 0.0467, 0.0323, 0.0467]
+  iter  5 : L1 diff = 0.02788374   PR = [0.3527, 0.1810, 0.3439, 0.0454, 0.0316, 0.0454]
+  iter  6 : L1 diff = 0.02177459
+  iter  7 : L1 diff = 0.01742658
+  iter  8 : L1 diff = 0.00746319
+  iter  9 : L1 diff = 0.00316116
+  iter 10 : L1 diff = 0.00265235
+  iter 11 : L1 diff = 0.00224686
+  iter 12 : L1 diff = 0.00095457
+  iter 13 : L1 diff = 0.00040536
+  iter 14 : L1 diff = 0.00034429
+  iter 15 : L1 diff = 0.00029251
+  iter 16 : L1 diff = 0.00012433
+  iter 17 : L1 diff = 0.00005284
+  iter 18 : L1 diff = 0.00004491
+  iter 19 : L1 diff = 0.00003817
+  iter 20 : L1 diff = 0.00001622
+  iter 21 : L1 diff = 0.00000689
+  iter 22 : L1 diff = 0.00000586
+  iter 23 : L1 diff = 0.00000498
+  iter 24 : L1 diff = 0.00000212
+  iter 25 : L1 diff = 0.00000090
+Converged in 25 iterations
+  PR[0] = 0.348745
+  PR[1] = 0.179540
+  PR[2] = 0.351120
+  PR[3] = 0.044636
+  PR[4] = 0.031323
+  PR[5] = 0.044636
+  (sum of ranks = 1.000000, should be ~1.0)
+
+---- Test Cases : random graphs, increasing N, avg out-deg = 6 ----
+      Size          N          E      Iters      Time(sec)
+     small       1000       5994         13       0.000120
+    medium      10000      59995         13       0.001672
+     large     100000     599992         13       0.020366
+
+Done.

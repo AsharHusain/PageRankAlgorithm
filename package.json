@@ -1,0 +1,31 @@
+{
+  "name": "pdc-pagerank-assignment",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "sync-assets": "node scripts/sync-assets.mjs",
+    "build:c": "node scripts/build-c.mjs",
+    "rebuild:c": "node scripts/build-c.mjs --force",
+    "capture-outputs": "node scripts/capture-outputs.mjs",
+    "verify": "node scripts/verify.mjs",
+    "postinstall": "node scripts/sync-assets.mjs && node scripts/build-c.mjs",
+    "predev": "node scripts/sync-assets.mjs && node scripts/build-c.mjs",
+    "prebuild": "node scripts/sync-assets.mjs && node scripts/build-c.mjs",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node server/standalone.mjs",
+    "smoke": "esbuild scripts/smoke-render.jsx --bundle --platform=node --format=esm --packages=external --outfile=node_modules/.smoke-render.mjs --log-level=error && node node_modules/.smoke-render.mjs",
+    "test": "node scripts/verify.mjs"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.12.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "vite": "^5.4.1"
+  }
+}
