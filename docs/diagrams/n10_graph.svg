@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="297mm" height="210mm" viewBox="0 0 1122 794" role="img" aria-labelledby="title desc">
+  <title id="title">Directed graph with ten vertices</title>
+  <desc id="desc">Exactly eleven directed edges: 0 to 1, 0 to 2, 1 to 2, 2 to 0, 3 to 0, 3 to 2, 4 to 3, 4 to 5, 6 to 7, 7 to 8, and 8 to 6. Vertex 5 is dangling and vertex 9 is isolated.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0L10 4L0 8Z" fill="#111"/></marker>
+    <marker id="smallArrow" markerWidth="8" markerHeight="7" refX="7" refY="3.5" orient="auto"><path d="M0 0L8 3.5L0 7Z" fill="#111"/></marker>
+  </defs>
+  <rect width="1122" height="794" fill="#fff"/>
+  <text x="561" y="60" text-anchor="middle" font-family="Georgia, serif" font-size="35" font-weight="bold" fill="#111">Directed graph · N = 10</text>
+  <text x="270" y="109" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="bold" fill="#111">Connected component · vertices 0–5</text>
+  <text x="800" y="109" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="bold" fill="#111">Cycle · vertices 6–8</text>
+  <text x="1012" y="109" text-anchor="middle" font-family="Georgia, serif" font-size="22" font-weight="bold" fill="#111">Isolated</text>
+  <g fill="#fff" stroke="#111" stroke-width="2.5">
+    <circle cx="145" cy="296" r="31"/><circle cx="285" cy="208" r="31"/><circle cx="435" cy="296" r="31"/><circle cx="285" cy="420" r="31"/><circle cx="145" cy="503" r="31"/><circle cx="435" cy="503" r="31"/>
+    <circle cx="699" cy="242" r="31"/><circle cx="850" cy="342" r="31"/><circle cx="699" cy="442" r="31"/><circle cx="1012" cy="342" r="31"/>
+  </g>
+  <g fill="none" stroke="#111" stroke-width="2.5" marker-end="url(#arrow)">
+    <path d="M171 278L258 224"/><path d="M176 304L403 304"/><path d="M312 222L407 278"/><path d="M408 316L175 316"/>
+    <path d="M267 408L162 325"/><path d="M305 397L415 322"/><path d="M166 481L268 435"/><path d="M175 508H403"/>
+    <path d="M725 260L824 325"/><path d="M824 360L725 425"/><path d="M680 412L680 272"/>
+  </g>
+  <g font-family="Georgia, serif" font-size="24" font-weight="bold" text-anchor="middle" dominant-baseline="central" fill="#111">
+    <text x="145" y="296">0</text><text x="285" y="208">1</text><text x="435" y="296">2</text><text x="285" y="420">3</text><text x="145" y="503">4</text><text x="435" y="503">5</text>
+    <text x="699" y="242">6</text><text x="850" y="342">7</text><text x="699" y="442">8</text><text x="1012" y="342">9</text>
+  </g>
+  <text x="435" y="559" text-anchor="middle" font-family="Georgia, serif" font-size="18" fill="#111">5 · dangling (no outgoing edges)</text>
+  <path d="M65 592H1057" stroke="#111" stroke-width="1.5"/>
+  <text x="64" y="632" font-family="Georgia, serif" font-size="19" font-weight="bold" fill="#111">Exact directed edge list (11 edges)</text>
+  <text x="64" y="666" font-family="Georgia, serif" font-size="18" fill="#111">0→1, 0→2, 1→2, 2→0, 3→0, 3→2, 4→3, 4→5, 6→7, 7→8, 8→6</text>
+  <text x="64" y="704" font-family="Georgia, serif" font-size="17" fill="#111">No other edges · 5 is dangling · 9 is isolated</text>
+</svg>

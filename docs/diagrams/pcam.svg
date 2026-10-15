@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="297mm" height="210mm" viewBox="0 0 1122 794" role="img" aria-labelledby="title desc">
+  <title id="title">PageRank MPI design using PCAM</title>
+  <desc id="desc">Five sequential PCAM stages, with the collectives used in communication and timing.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0L10 4L0 8Z" fill="#111"/></marker></defs>
+  <rect width="1122" height="794" fill="#fff"/>
+  <g font-family="Georgia, serif" fill="#111"><text x="561" y="76" text-anchor="middle" font-size="35" font-weight="bold">PageRank with MPI · PCAM</text><text x="561" y="112" text-anchor="middle" font-size="19">A design sequence from the problem to process placement</text></g>
+  <g fill="#fff" stroke="#111" stroke-width="2.5">
+    <rect x="58" y="178" width="178" height="365"/><rect x="264" y="178" width="178" height="365"/><rect x="470" y="178" width="178" height="365"/><rect x="676" y="178" width="178" height="365"/><rect x="882" y="178" width="178" height="365"/>
+  </g>
+  <g font-family="Georgia, serif" fill="#111" text-anchor="middle">
+    <text x="147" y="225" font-size="26" font-weight="bold">Problem</text><text x="147" y="280" font-size="19"><tspan x="147">Compute PageRank</tspan><tspan x="147" dy="29">until error is below</tspan><tspan x="147" dy="29">tolerance.</tspan><tspan x="147" dy="52">Graph and rank vector</tspan><tspan x="147" dy="29">replicated per process.</tspan></text>
+    <text x="353" y="225" font-size="26" font-weight="bold">Partitioning</text><text x="353" y="280" font-size="19"><tspan x="353">Contiguous vertex</tspan><tspan x="353" dy="29">ranges; each process</tspan><tspan x="353" dy="29">owns its rank updates.</tspan><tspan x="353" dy="52">Local dangling sum</tspan><tspan x="353" dy="29">and local L1 error.</tspan></text>
+    <text x="559" y="225" font-size="26" font-weight="bold">Communication</text><text x="559" y="280" font-size="19"><tspan x="559">Per iteration, in order:</tspan><tspan x="559" dy="42">Allreduce SUM</tspan><tspan x="559" dy="27">dangling rank</tspan><tspan x="559" dy="38">Allgatherv</tspan><tspan x="559" dy="27">next rank vector</tspan><tspan x="559" dy="38">Allreduce SUM</tspan><tspan x="559" dy="27">global error</tspan><tspan x="559" dy="40">After loop: Reduce MAX</tspan><tspan x="559" dy="27">elapsed time to root</tspan></text>
+    <text x="765" y="225" font-size="26" font-weight="bold">Agglomeration</text><text x="765" y="280" font-size="19"><tspan x="765">One contiguous range</tspan><tspan x="765" dy="29">per process; scan its</tspan><tspan x="765" dy="29">incoming CSR edges.</tspan><tspan x="765" dy="52">Collective exchanges</tspan><tspan x="765" dy="29">instead of edge-by-edge</tspan><tspan x="765" dy="29">messages.</tspan></text>
+    <text x="971" y="225" font-size="26" font-weight="bold">Mapping</text><text x="971" y="280" font-size="19"><tspan x="971">Map one range to</tspan><tspan x="971" dy="29">each MPI process.</tspan><tspan x="971" dy="55">Example · N=6, P=2</tspan><tspan x="971" dy="34">Process 0: 0–2</tspan><tspan x="971" dy="34">Process 1: 3–5</tspan><tspan x="971" dy="55">Each process holds</tspan><tspan x="971" dy="29">the same full graph.</tspan></text>
+  </g>
+  <g fill="none" stroke="#111" stroke-width="2.5" marker-end="url(#arrow)"><path d="M236 360H256"/><path d="M442 360H462"/><path d="M648 360H668"/><path d="M854 360H874"/></g>
+  <path d="M58 592H1060" stroke="#111" stroke-width="1.5"/>
+  <text x="561" y="634" text-anchor="middle" font-family="Georgia, serif" font-size="20" fill="#111">Timer starts after setup and MPI_Barrier; maximum elapsed time is reduced after the loop.</text>
+  <text x="561" y="680" text-anchor="middle" font-family="Georgia, serif" font-size="17" fill="#111">Simple ownership · replicated graph and rank state · collective communication</text>
+</svg>

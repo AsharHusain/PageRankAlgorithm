@@ -1,0 +1,5 @@
+command=mpicc -O2 -std=c11 -Wall -Wextra -pedantic -DPR_MAX_ITERATIONS=1 c/mpi_pagerank.c -o /tmp/opencode/pagerank-one-iteration-mpi
+command=mpirun -np 4 /tmp/opencode/pagerank-one-iteration-mpi --case N10 --emit-ranks
+exit_status=1
+10,11,1,0.000027189,max_iterations,0.42499999999999999
+ranks,0.1595,0.074500000000000011,0.20200000000000001,0.074500000000000011,0.032000000000000001,0.074500000000000011,0.11700000000000001,0.11700000000000001,0.11700000000000001,0.032000000000000001

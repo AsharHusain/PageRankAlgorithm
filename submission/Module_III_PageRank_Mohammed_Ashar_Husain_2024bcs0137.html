@@ -1,0 +1,373 @@
+<!doctype html><html><head><meta charset='utf-8'><style>
+      @page { size: A4; margin: 18mm 16mm 20mm; @top-center { content: "Mohammed Ashar Husain | Roll No. 2024bcs0137"; font: 8pt Arial; color: #555; } }
+      body { font: 10pt Arial, sans-serif; color: #20252b; line-height: 1.45; }
+      h1 { font-size: 27pt; } h2 { font-size: 17pt; margin-top: 20pt; }
+      h3 { font-size: 13pt; } p { margin: 6pt 0; } .identity { font-weight: bold; border-bottom: 1px solid #888; padding-bottom: 5pt; }
+      .cover { page-break-after: always; padding-top: 90mm; } .notice { page-break-after: always; }
+      section { page-break-inside: auto; } pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 7.2pt "DejaVu Sans Mono", monospace; background: #f2f4f6; padding: 8pt; }
+      code { font-family: "DejaVu Sans Mono", monospace; } table { border-collapse: collapse; width: 100%; font-size: 8pt; margin: 8pt 0; }
+      th, td { border: 1px solid #9aa1a8; padding: 4pt; vertical-align: top; } th { background: #e9edf1; }
+      img { max-width: 100%; max-height: 170mm; } figure { text-align: center; } figcaption { font-size: 8pt; }
+      .list-item { margin-left: 18pt; } .notice { border: 1px solid #9a6b00; padding: 10pt; }
+    </style></head><body>
+      <section class="cover"><h1>Assignment 2 — PageRank</h1>
+      <h2>Module III: MPI</h2><p class="identity">Mohammed Ashar Husain — Roll No. 2024bcs0137</p>
+      <p>Typed companion submission containing the existing Module III answers (Q6–Q11),
+      current project source listings, recorded N=10 execution output, and the current
+      comparison graph.</p></section>
+      <section class="notice"><h2>Submission scope and required manual attachments</h2>
+      <p>This PDF is a typed companion, not a substitute for handwritten work. The original
+      handwritten Module I/III answers (including Q1, Q2, Q3, Q5, Q6, Q7, Q8 and Q10)
+      and the signed hardcopy must be manually attached for official compliance. They are
+      not reproduced here because no handwritten originals or historical Assignment 1
+      source are available. The serial listing below is the current project implementation,
+      not a claim that it is the historical Assignment 1 source.</p></section>
+      <section><h2>Module III answers — Questions 6–11</h2><h1>Module III — PageRank with MPI (Questions 6–11)</h1>
+<p>This submission addresses the MPI module of Assignment 2. PageRank is computed on a directed graph in incoming-CSR form. Each iteration uses the current rank vector, redistributes dangling-node rank uniformly, and updates all destinations. The serial and OpenMP implementations are the corresponding Module I/II implementations in this project and are used as comparison baselines; this comparison does <strong>not</strong> assert that their source is byte-for-byte the same as a historical Assignment 1 submission. The assignment PDF labels Q9a “using OpenMP” under the MPI heading; this section follows the heading and implements MPI.</p>
+<h2>Q6. Parallelizable blocks — Foster’s PCAM methodology</h2>
+<p>For a fixed iteration, the new rank of each destination is independent after the previous rank vector and total dangling mass are known. Iterations are dependent: the new vector from iteration <em>k</em> is required by iteration <em>k+1</em>. The global L1 convergence test also requires a reduction before all processes can make the same stop/continue decision.</p>
+<p class="list-item"><strong>Partitioning.</strong> Split destination vertices into contiguous, nearly equal ownership ranges. For process <code>p</code> of <code>P</code>, the range is <code>[floor(Np/P), floor(N(p+1)/P))</code>. The independently parallel tasks are the incoming-edge rank sum and new-rank calculation for each owned destination; owned vertices also contribute to local dangling mass and local L1 error.</p>
+<p class="list-item"><strong>Communication.</strong> Before updates, <code>MPI_Allreduce(SUM)</code> combines local dangling mass. After local destination updates, <code>MPI_Allgatherv</code> assembles the complete next rank vector on every process. A second <code>MPI_Allreduce(SUM)</code> combines L1 error for the common convergence decision. On exit, <code>MPI_Reduce(MAX)</code> reports the maximum elapsed process time to rank 0.</p>
+<p class="list-item"><strong>Agglomeration.</strong> Group all destination updates and CSR incoming-edge scans in a process’s range into one local work block per iteration. Communicate once at iteration boundaries rather than per edge or vertex. The program retains a replicated graph and rank vectors; this agglomeration therefore groups computation, not graph storage.</p>
+<p class="list-item"><strong>Mapping.</strong> Map each contiguous block to one MPI process. For the N=10, P=4 demonstration below, the ownership blocks are <code>[0,2)</code>, <code>[2,5)</code>, <code>[5,7)</code>, and <code>[7,10)</code>. Each process builds/stores the same graph and full current vector, and computes only its owned destinations.</p>
+<pre><code>PROBLEM: directed PageRank on N destinations
+       │
+       └─ Partition destinations / vertex-update tasks
+              [0..b1) [b1..b2) ... [b(P-1)..N)
+                         │
+                         └─ Communication dependencies
+                            dangling-mass Allreduce
+                            next-rank Allgatherv
+                            L1-error Allreduce
+                                      │
+                                      └─ Agglomerate each process&#x27;s owned
+                                         destination updates + CSR scans
+                                                │
+                                                └─ Map blocks to processes
+                                                   MPI rank 0: block 0
+                                                   MPI rank 1: block 1
+                                                   ...
+                                                   MPI rank P-1: block P-1
+
+Iteration dependency: rank(k) → rank(k+1) → rank(k+2) → ...</code></pre>
+<p>The diagram follows the assignment’s required PCAM sequence—problem, partitioning, communication, agglomeration, mapping—and names the actual MPI collectives and work blocks.</p>
+<h2>Q7. MPI pseudocode</h2>
+<p>The algorithm below reflects the collective order and timing scope in <code>c/mpi_pagerank.c</code> (c/mpi_pagerank.c) and the shared constants in <code>c/shared_graph.h</code> (c/shared_graph.h): damping <code>d=0.85</code>, L1 tolerance <code>1e-6</code>, and maximum <code>10,000</code> iterations.</p>
+<pre><code>MPI_Init; obtain process rank p and process count P
+Every process constructs and validates the same incoming-CSR graph G(N,E)
+begin = floor(N*p/P); end = floor(N*(p+1)/P)  // owned destinations [begin,end)
+Initialize rank[v] = 1/N for every vertex; allocate next and local_values
+For every process q:
+    counts[q] = floor(N*(q+1)/P) - floor(N*q/P)
+    displacements[q] = floor(N*q/P)
+
+MPI_Barrier
+start = MPI_Wtime()
+for iteration = 1 .. 10,000:
+    local_dangling = sum(rank[v] for v in [begin,end) when out_degree[v] = 0)
+    dangling = MPI_Allreduce(local_dangling, SUM)
+    base = (1-d)/N + d*dangling/N
+    for each owned destination v in [begin,end):
+        incoming = sum(rank[u]/out_degree[u] for each CSR edge u → v)
+        local_values[v-begin] = base + d*incoming
+    MPI_Allgatherv(local_values, counts, displacements, next)
+    local_error = sum(abs(next[v]-rank[v]) for v in [begin,end))
+    error = MPI_Allreduce(local_error, SUM)
+    swap(rank, next); iterations = iteration
+    if error &lt; 1e-6: break
+
+local_elapsed = MPI_Wtime() - start
+elapsed = MPI_Reduce(local_elapsed, MAX, root=0)
+Rank 0 prints N,E,iterations,elapsed,status,final_L1_error and optional ranks
+Free allocated memory; MPI_Finalize</code></pre>
+<h2>Q8. MPI solution demonstration — N=10, first iteration</h2>
+<p>Take the explicit 10-vertex, 11-edge directed graph from the test fixture and <code>c/shared_graph.h</code> (c/shared_graph.h):</p>
+<pre><code>0→1, 0→2, 1→2, 2→0, 3→0, 3→2, 4→3, 4→5, 6→7, 7→8, 8→6</code></pre>
+<p>The initial rank of every vertex is <code>0.1</code>. Its outgoing degrees are <code>out(0)=2</code>, <code>out(1)=1</code>, <code>out(2)=1</code>, <code>out(3)=2</code>, <code>out(4)=2</code>, <code>out(5)=0</code>, <code>out(6)=out(7)=out(8)=1</code>, and <code>out(9)=0</code>. Thus vertices 5 and 9 are dangling. Incoming lists (empty lists shown as <code>∅</code>) are:</p>
+<table><thead><tr><th>Destination</th><th>Incoming source vertices</th></tr></thead><tbody>
+<tr><td>0</td><td>2, 3</td></tr>
+<tr><td>1</td><td>0</td></tr>
+<tr><td>2</td><td>0, 1, 3</td></tr>
+<tr><td>3</td><td>4</td></tr>
+<tr><td>4</td><td>∅</td></tr>
+<tr><td>5</td><td>4</td></tr>
+<tr><td>6</td><td>8</td></tr>
+<tr><td>7</td><td>6</td></tr>
+<tr><td>8</td><td>7</td></tr>
+<tr><td>9</td><td>∅</td></tr>
+</tbody></table>
+<p>With four processes, the owned ranges and first-step dangling contributions are:</p>
+<table><thead><tr><th>MPI process</th><th>Owned vertices</th><th>Local dangling rank</th></tr></thead><tbody>
+<tr><td>0</td><td><code>[0,2)</code></td><td>0</td></tr>
+<tr><td>1</td><td><code>[2,5)</code></td><td>0</td></tr>
+<tr><td>2</td><td><code>[5,7)</code></td><td>0.1 (vertex 5)</td></tr>
+<tr><td>3</td><td><code>[7,10)</code></td><td>0.1 (vertex 9)</td></tr>
+<tr><td><strong>Global</strong></td><td><code>[0,10)</code></td><td><strong>0.2</strong></td></tr>
+</tbody></table>
+<p>Allreduce gives <code>D=0.2</code>. The common base term is <code>((1−0.85)/10) + (0.85×0.2/10) = 0.032</code>. Applying <code>next[v] = base + 0.85 × Σ(rank[u]/out_degree[u])</code> over the incoming list yields:</p>
+<table><thead><tr><th>v</th><th>Incoming contribution before damping</th><th><code>next[v]</code></th></tr></thead><tbody>
+<tr><td>0</td><td><code>0.1/1 + 0.1/2 = 0.15</code></td><td>0.1595</td></tr>
+<tr><td>1</td><td><code>0.1/2 = 0.05</code></td><td>0.0745</td></tr>
+<tr><td>2</td><td><code>0.1/2 + 0.1/1 + 0.1/2 = 0.20</code></td><td>0.2020</td></tr>
+<tr><td>3</td><td><code>0.1/2 = 0.05</code></td><td>0.0745</td></tr>
+<tr><td>4</td><td>0</td><td>0.0320</td></tr>
+<tr><td>5</td><td><code>0.1/2 = 0.05</code></td><td>0.0745</td></tr>
+<tr><td>6</td><td><code>0.1/1 = 0.10</code></td><td>0.1170</td></tr>
+<tr><td>7</td><td><code>0.1/1 = 0.10</code></td><td>0.1170</td></tr>
+<tr><td>8</td><td><code>0.1/1 = 0.10</code></td><td>0.1170</td></tr>
+<tr><td>9</td><td>0</td><td>0.0320</td></tr>
+</tbody></table>
+<p>Therefore the first update is <strong><code>[0.1595, 0.0745, 0.202, 0.0745, 0.032, 0.0745, 0.117, 0.117, 0.117, 0.032]</code></strong>. Its L1 change from the initial vector is <code>Σ|next[v]−0.1| = 0.425</code>. The rank vector is gathered across processes before convergence is assessed.</p>
+<p>This first-step vector is checked by the integration test’s independent edge/reference calculation and by a separate one-iteration build of the serial and MPI programs (runner (tests/test_pagerank.py), test results (outputs/test_results.txt)). A four-process capped MPI run produced the saved actual output (outputs/n10_first_iteration.txt); it exits with status 1 intentionally because reaching the compile-time iteration cap is reported as <code>max_iterations</code>:</p>
+<pre><code>10,11,1,0.000027189,max_iterations,0.42499999999999999
+ranks,0.1595,0.074500000000000011,0.20200000000000001,0.074500000000000011,0.032000000000000001,0.074500000000000011,0.11700000000000001,0.11700000000000001,0.11700000000000001,0.032000000000000001</code></pre>
+<p>For the converged two-process run, the actual raw MPI log records:</p>
+<pre><code>10,11,25,0.000064743,success,5.6465066086697213e-07
+ranks,0.21036722214068665,0.10830075012743358,0.21179967062274907,0.026924893717531297,0.018894662257914793,0.026924893717531297,0.12596441505274619,0.12596441505274619,0.12596441505274619,0.018894662257914793</code></pre>
+<p>This is the MPI/2 attempt recorded in <code>outputs/mpi_output.txt</code> (outputs/mpi_output.txt), not an invented or hand-calculated converged result. The benchmark’s independently parsed N10 rows also report 25 iterations and final residual <code>5.646506608669721e-7</code> for every implementation/worker count (comparison data (outputs/comparison.csv)).</p>
+<h2>Q9. MPI implementation, execution, and outputs</h2>
+<p>The implementation is <code>c/mpi_pagerank.c</code> (c/mpi_pagerank.c); graph allocation, deterministic generation, explicit N10 edges, CLI options, and shared PageRank constants are in <code>c/shared_graph.h</code> (c/shared_graph.h). The implementation replicates the graph and full rank vectors, computes a contiguous vertex range on each rank, and produces one CSV result row; <code>--emit-ranks</code> adds a second <code>ranks,...</code> row. It builds with the recorded compiler options:</p>
+<pre><code>mpicc -O2 -std=c11 -Wall -Wextra -pedantic c/mpi_pagerank.c -o outputs/bin/mpi_pagerank
+mpirun -np 2 outputs/bin/mpi_pagerank --case N10 --emit-ranks
+mpirun -np 4 outputs/bin/mpi_pagerank --case N100000 --emit-ranks</code></pre>
+<p>For benchmark reproduction, build the three implementations and run the project runner (one warmup followed by five successful timed readings per configuration):</p>
+<pre><code>gcc -O2 -std=c11 -Wall -Wextra -pedantic c/serial_pagerank.c -o outputs/bin/serial_pagerank
+gcc -O2 -std=c11 -Wall -Wextra -pedantic -fopenmp c/openmp_pagerank.c -o outputs/bin/openmp_pagerank
+mpicc -O2 -std=c11 -Wall -Wextra -pedantic c/mpi_pagerank.c -o outputs/bin/mpi_pagerank
+python3 tests/test_pagerank.py
+python3 scripts/benchmark.py</code></pre>
+<p>The actual N10/2-process output is shown in Q8. The result row has six comma-separated fields—<code>N,E,iterations,seconds,status,final_L1_error</code>—followed by a <code>ranks,...</code> row when <code>--emit-ranks</code> is requested.</p>
+<p>The N10 fixture and each case’s successful timed results agree in rank sum and rank vector across serial, OpenMP, and MPI. The current benchmark and test results are summarized below; iterations and final residual are from the recorded result CSVs, not extrapolated. MPI process counts are 1, 2, and 4 for each case.</p>
+<table><thead><tr><th>Case</th><th>N</th><th>E</th><th>Iterations</th><th>Final L1 residual</th><th>MPI process counts</th></tr></thead><tbody>
+<tr><td>N10</td><td>10</td><td>11</td><td>25</td><td>5.6465066e-7</td><td>1, 2, 4</td></tr>
+<tr><td>N100</td><td>100</td><td>594</td><td>56</td><td>9.4587330e-7</td><td>1, 2, 4</td></tr>
+<tr><td>N1000</td><td>1,000</td><td>5,994</td><td>43</td><td>8.8181542e-7</td><td>1, 2, 4</td></tr>
+<tr><td>N10000</td><td>10,000</td><td>59,995</td><td>30</td><td>8.7482626e-7</td><td>1, 2, 4</td></tr>
+<tr><td>N100000</td><td>100,000</td><td>599,992</td><td>16</td><td>9.6722143e-7</td><td>1, 2, 4</td></tr>
+</tbody></table>
+<p>Run-level output and rank validation are available in <code>outputs/serial_results.csv</code> (outputs/serial_results.csv), <code>outputs/openmp_results.csv</code> (outputs/openmp_results.csv), <code>outputs/mpi_results.csv</code> (outputs/mpi_results.csv), and the consolidated <code>outputs/comparison.csv</code> (outputs/comparison.csv). The test runner reports <strong>6/6 passed, 0 failures, 0 errors, 0 skipped</strong> (test record (outputs/test_results.txt)).</p>
+<h2>Q10. MPI time and space analysis</h2>
+<p>Let <code>N</code> be the vertex count, <code>E</code> the edge count, <code>I</code> the number of iterations, and <code>P</code> the process count. Serial work is <code>O(I(N+E))</code>; OpenMP shares the graph and parallelizes vertex scans and updates, subject to thread overhead. In MPI, each iteration scans owned vertices for dangling rank and L1 error and scans the incoming edges of owned destinations. With balanced vertex and edge work, local computation per process is approximately <code>O(I(N+E)/P)</code>. If incoming-edge work is uneven, contiguous vertex ranges can have unequal loads; elapsed iteration time is determined by the slowest process. The <code>I</code> iterations remain sequentially dependent.</p>
+<p>Each MPI process stores the complete incoming CSR graph (<code>O(N+E)</code>), current and next full rank vectors (<code>O(N)</code>), and its local update array (<code>O(N/P)</code>); thus memory is <strong><code>O(N+E)</code> per process</strong> and <code>O(P(N+E))</code> across processes, not sharded <code>O((N+E)/P)</code> memory. Every iteration performs two scalar sum all-reductions and one all-gather that assembles <code>N</code> rank values on <strong>each</strong> process. Synchronization and data movement can limit scaling. A more detailed communication time depends on MPI collective algorithms, process placement, network topology, and message sizes; the measured single-machine runs do not establish a universal network-cost formula.</p>
+<p>Graph construction and process startup are outside the timed region. The MPI timer starts after an <code>MPI_Barrier</code>, includes the iterative computation and collectives, and each run reports the maximum elapsed time across processes (timer and reduction (c/mpi_pagerank.c)).</p>
+<h2>Q11. Execution-time comparison</h2>
+<p>The benchmark was just run for all five graph sizes and all reported configurations: one warmup and <strong>five successful timed repetitions per configuration</strong>, with zero failed benchmark runs. Values below are current-run data from <code>outputs/comparison.csv</code> (outputs/comparison.csv), which consolidates the per-implementation CSV files. Each timing cell lists <strong>median / minimum / IQR</strong>, in seconds; IQR is the recorded third quartile minus first quartile. The selected comparison columns are serial, OpenMP/4, and MPI/1, MPI/2, MPI/4. OpenMP uses <code>OMP_NUM_THREADS</code> equal to its worker count and <code>OMP_DYNAMIC=FALSE</code>. Graph generation is outside the timer; MPI reports the maximum process elapsed time.</p>
+<table><thead><tr><th>Case (N, E)</th><th>Serial (median / min / IQR, s)</th><th>OpenMP/4 (s)</th><th>MPI/1 (s)</th><th>MPI/2 (s)</th><th>MPI/4 (s)</th></tr></thead><tbody>
+<tr><td>N10 (10, 11)</td><td>1.587e-6 / 1.219e-6 / 4.450e-7</td><td>5.548e-4 / 5.084e-4 / 1.723e-4</td><td>2.130e-5 / 2.056e-5 / 1.006e-6</td><td>6.474e-5 / 5.679e-5 / 9.345e-6</td><td>1.387e-4 / 1.078e-4 / 2.643e-5</td></tr>
+<tr><td>N100 (100, 594)</td><td>8.786e-5 / 7.630e-5 / 5.640e-6</td><td>1.008e-3 / 9.824e-4 / 6.600e-6</td><td>6.634e-5 / 6.358e-5 / 1.040e-5</td><td>1.163e-4 / 1.152e-4 / 4.882e-5</td><td>2.849e-4 / 2.162e-4 / 4.864e-5</td></tr>
+<tr><td>N1000 (1,000, 5,994)</td><td>4.410e-4 / 2.294e-4 / 3.855e-4</td><td>1.009e-3 / 9.328e-4 / 4.180e-4</td><td>2.964e-4 / 2.934e-4 / 1.405e-5</td><td>2.561e-4 / 2.399e-4 / 1.012e-4</td><td>3.508e-4 / 2.924e-4 / 4.635e-5</td></tr>
+<tr><td>N10000 (10,000, 59,995)</td><td>1.830e-3 / 1.662e-3 / 6.944e-4</td><td>1.991e-3 / 1.793e-3 / 1.913e-4</td><td>1.930e-3 / 1.916e-3 / 1.473e-4</td><td>1.255e-3 / 1.197e-3 / 7.541e-5</td><td>1.029e-3 / 1.024e-3 / 6.186e-5</td></tr>
+<tr><td>N100000 (100,000, 599,992)</td><td>9.252e-3 / 8.939e-3 / 1.484e-3</td><td>8.243e-3 / 6.786e-3 / 3.217e-3</td><td>1.114e-2 / 1.069e-2 / 4.073e-4</td><td>6.543e-3 / 6.029e-3 / 2.018e-4</td><td>5.660e-3 / 4.734e-3 / 4.846e-4</td></tr>
+</tbody></table>
+<p>For reference, median times and speedups for all OpenMP and MPI worker counts are included in the generated <code>report.md</code> (report.md). The graphs below plot the selected serial, OpenMP/4 and MPI/4 medians on a logarithmic seconds axis; both are outputs of the current benchmark.</p>
+<figure><img src="file:///home/ash/Documents/College/Sem5/PADC/PageRank/outputs/comparison.svg"><figcaption>Median runtime by graph size, serial vs. OpenMP/4 vs. MPI/4; logarithmic seconds</figcaption></figure>
+<h3>Speedup and efficiency relative to serial</h3>
+<p>Here <code>speedup = serial median / parallel median</code> and <code>efficiency = speedup / worker count</code>. Each cell gives <strong>speedup × / efficiency</strong>. An MPI process and an OpenMP thread are different execution resources, so cross-model speedups alone do not establish equal-cost scaling.</p>
+<table><thead><tr><th>Case</th><th>OpenMP/4</th><th>MPI/1</th><th>MPI/2</th><th>MPI/4</th></tr></thead><tbody>
+<tr><td>N10</td><td>0.003× / 0.001</td><td>0.074× / 0.074</td><td>0.025× / 0.012</td><td>0.011× / 0.003</td></tr>
+<tr><td>N100</td><td>0.087× / 0.022</td><td>1.324× / 1.324</td><td>0.755× / 0.378</td><td>0.308× / 0.077</td></tr>
+<tr><td>N1000</td><td>0.437× / 0.109</td><td>1.488× / 1.488</td><td>1.722× / 0.861</td><td>1.257× / 0.314</td></tr>
+<tr><td>N10000</td><td>0.919× / 0.230</td><td>0.948× / 0.948</td><td>1.459× / 0.729</td><td>1.778× / 0.444</td></tr>
+<tr><td>N100000</td><td>1.122× / 0.281</td><td>0.831× / 0.831</td><td>1.414× / 0.707</td><td>1.635× / 0.409</td></tr>
+</tbody></table>
+<p>For N10, parallel overhead dominates: every OpenMP/4 and MPI configuration is slower than serial. At N100000, MPI/4 is 1.635× faster than serial in this run, but still far from ideal four-process scaling. These observations reflect measured timing and communication/coordination overhead, not a change to PageRank&#x27;s asymptotic work.</p>
+<h3>MPI scaling relative to MPI/1</h3>
+<p>MPI strong-scaling speedup is <code>T_MPI/1 / T_MPI/P</code>; efficiency is that speedup divided by <code>P</code>. This uses the same MPI implementation as the baseline and is distinct from serial-relative speedup.</p>
+<table><thead><tr><th>Case</th><th>MPI/2 speedup</th><th>MPI/2 efficiency</th><th>MPI/4 speedup</th><th>MPI/4 efficiency</th></tr></thead><tbody>
+<tr><td>N10</td><td>0.329×</td><td>0.165</td><td>0.154×</td><td>0.038</td></tr>
+<tr><td>N100</td><td>0.570×</td><td>0.285</td><td>0.233×</td><td>0.058</td></tr>
+<tr><td>N1000</td><td>1.157×</td><td>0.579</td><td>0.845×</td><td>0.211</td></tr>
+<tr><td>N10000</td><td>1.539×</td><td>0.769</td><td>1.875×</td><td>0.469</td></tr>
+<tr><td>N100000</td><td>1.702×</td><td>0.851</td><td>1.968×</td><td>0.492</td></tr>
+</tbody></table>
+<h3>Correctness and environment</h3>
+<table><thead><tr><th>Check / environment</th><th>Recorded result</th></tr></thead><tbody>
+<tr><td>Integration suite</td><td>6 tests passed; 0 failures, 0 errors, 0 skipped (record (outputs/test_results.txt))</td></tr>
+<tr><td>Generated benchmark</td><td>Five sizes; one warmup + five successful timed readings/configuration; 0 failed benchmark runs</td></tr>
+<tr><td>Numerical validity</td><td>Ranks finite and nonnegative; sum within <code>1e-8</code> of 1; final L1 residual <code>&lt;1e-6</code></td></tr>
+<tr><td>Cross-implementation comparison</td><td>Maximum rank delta <code>≤1e-8</code> in benchmark validation; tests use <code>5e-6</code> against independent reference to allow summation-order differences</td></tr>
+<tr><td>Graph construction</td><td>Generated cases use <code>pair(k)=((N+1)k+17) mod N²</code>, skip self-loops, and have unique directed pairs; N10 is an explicit 11-edge fixture, not generated from the affine sequence</td></tr>
+<tr><td>Machine</td><td>Linux x86_64; Intel Core Ultra 9 185H; 22 logical CPUs reported/available</td></tr>
+<tr><td>Toolchain / MPI</td><td>GCC 16.2.1; Open MPI 5.0.10; <code>-O2 -std=c11 -Wall -Wextra -pedantic</code>; OpenMP adds <code>-fopenmp</code></td></tr>
+<tr><td>Runtime setup</td><td>OpenMP threads 1/2/4; MPI processes 1/2/4; no MPI root override used</td></tr>
+</tbody></table>
+<p>The algorithm preserves normalized PageRank: every vertex starts at <code>1/N</code>, dangling mass is redistributed uniformly, and the recorded converged rank sums are within <code>1e-8</code> of 1. For N10, the final rank vector is printed above in vertex order; it is not sorted separately, because each array position identifies its vertex.</p>
+<p>The detailed environment, commands, timing boundaries, and validation definitions are recorded in <code>outputs/metadata.txt</code> (outputs/metadata.txt); individual successful readings are in the three result CSVs linked above. Timings, especially microsecond-scale cases, are sensitive to system state and should be interpreted as this machine’s measurements, not general hardware-independent performance claims.</p></section>
+    <section><h2>Current serial C source listing — c/serial_pagerank.c</h2><p class="identity">Mohammed Ashar Husain — Roll No. 2024bcs0137</p><p>Identity is printed in this page header; it is not program stdout.</p><pre><code>#define _POSIX_C_SOURCE 200809L
+#include &quot;shared_graph.h&quot;
+
+#include &lt;time.h&gt;
+
+static double monotonic_seconds(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &amp;ts) != 0)
+        return 0.0;
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+int main(int argc, char **argv)
+{
+    PRCase c;
+    PRGraph graph = {0};
+    double *rank, *next;
+    double final_error = 0.0;
+    size_t iterations = 0;
+    int success = 0;
+    if (!pr_parse_case(argc, argv, &amp;c)) {
+        pr_usage(argv[0]);
+        return EXIT_FAILURE;
+    }
+    if (!pr_graph_build(&amp;graph, &amp;c) || !pr_graph_valid(&amp;graph)) {
+        fprintf(stderr, &quot;Unable to construct graph\n&quot;);
+        return EXIT_FAILURE;
+    }
+    rank = pr_initial_ranks(graph.n);
+    next = pr_rank_vector(graph.n);
+    if (rank == NULL || next == NULL) {
+        fprintf(stderr, &quot;Unable to allocate rank vectors\n&quot;);
+        free(rank); free(next); pr_graph_free(&amp;graph);
+        return EXIT_FAILURE;
+    }
+    const double start = monotonic_seconds();
+    for (size_t iter = 1; iter &lt;= PR_MAX_ITERATIONS; ++iter) {
+        double dangling = 0.0, error = 0.0;
+        for (size_t v = 0; v &lt; graph.n; ++v)
+            if (graph.out_degree[v] == 0) dangling += rank[v];
+        const double base = (1.0 - PR_DAMPING) / (double)graph.n +
+                            PR_DAMPING * dangling / (double)graph.n;
+        for (size_t v = 0; v &lt; graph.n; ++v) {
+            double incoming = 0.0;
+            for (size_t p = graph.in_offsets[v]; p &lt; graph.in_offsets[v + 1]; ++p) {
+                const size_t src = (size_t)graph.in_sources[p];
+                incoming += rank[src] / (double)graph.out_degree[src];
+            }
+            next[v] = base + PR_DAMPING * incoming;
+            error += next[v] &gt;= rank[v] ? next[v] - rank[v] : rank[v] - next[v];
+        }
+        final_error = error;
+        { double *tmp = rank; rank = next; next = tmp; }
+        iterations = iter;
+        if (error &lt; PR_TOLERANCE) { success = 1; break; }
+    }
+    const double elapsed = monotonic_seconds() - start;
+    pr_print_result(&amp;graph, iterations, elapsed, success, final_error,
+                    c.emit_ranks, rank);
+    free(rank); free(next); pr_graph_free(&amp;graph);
+    return success ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+</code></pre></section><section><h2>Current MPI C source listing — c/mpi_pagerank.c</h2><p class="identity">Mohammed Ashar Husain — Roll No. 2024bcs0137</p><p>Identity is printed in this page header; it is not program stdout.</p><pre><code>#include &quot;shared_graph.h&quot;
+
+#include &lt;mpi.h&gt;
+
+int main(int argc, char **argv)
+{
+    int rank_id, world_size;
+    PRCase c;
+    PRGraph graph = {0};
+    double *rank = NULL, *next = NULL, *local_values = NULL;
+    double final_error = 0.0;
+    int *counts = NULL, *displacements = NULL;
+    size_t begin, end, local_n, iterations = 0;
+    int success = 0;
+
+    if (MPI_Init(&amp;argc, &amp;argv) != MPI_SUCCESS)
+        return EXIT_FAILURE;
+    if (MPI_Comm_rank(MPI_COMM_WORLD, &amp;rank_id) != MPI_SUCCESS ||
+        MPI_Comm_size(MPI_COMM_WORLD, &amp;world_size) != MPI_SUCCESS)
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    if (!pr_parse_case(argc, argv, &amp;c)) {
+        if (rank_id == 0) pr_usage(argv[0]);
+        MPI_Finalize();
+        return EXIT_FAILURE;
+    }
+    /* Replicated deterministic graph: each rank stores the same incoming CSR,
+     * and owns only a contiguous range of vertices for each update. */
+    if (!pr_graph_build(&amp;graph, &amp;c) || !pr_graph_valid(&amp;graph)) {
+        if (rank_id == 0) fprintf(stderr, &quot;Unable to construct graph\n&quot;);
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    }
+    if (world_size &lt;= 0 || graph.n &gt; (size_t)INT_MAX) {
+        if (rank_id == 0) fprintf(stderr, &quot;Graph partition exceeds MPI count limits\n&quot;);
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    }
+    begin = graph.n * (size_t)rank_id / (size_t)world_size;
+    end = graph.n * (size_t)(rank_id + 1) / (size_t)world_size;
+    local_n = end - begin;
+    rank = pr_initial_ranks(graph.n);
+    next = pr_rank_vector(graph.n);
+    local_values = local_n &gt; SIZE_MAX / sizeof(*local_values) ? NULL :
+        (double *)malloc((local_n == 0 ? 1 : local_n) * sizeof(*local_values));
+    if ((size_t)world_size &gt; SIZE_MAX / sizeof(*counts) ||
+        (size_t)world_size &gt; SIZE_MAX / sizeof(*displacements))
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    counts = (int *)malloc((size_t)world_size * sizeof(*counts));
+    displacements = (int *)malloc((size_t)world_size * sizeof(*displacements));
+    if (rank == NULL || next == NULL || local_values == NULL || counts == NULL || displacements == NULL) {
+        fprintf(stderr, &quot;Rank %d: unable to allocate rank vectors\n&quot;, rank_id);
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    }
+    for (int p = 0; p &lt; world_size; ++p) {
+        const size_t first = graph.n * (size_t)p / (size_t)world_size;
+        const size_t last = graph.n * (size_t)(p + 1) / (size_t)world_size;
+        if (last - first &gt; (size_t)INT_MAX || first &gt; (size_t)INT_MAX) {
+            if (rank_id == 0) fprintf(stderr, &quot;MPI count/displacement overflow\n&quot;);
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        }
+        counts[p] = (int)(last - first);
+        displacements[p] = (int)first;
+    }
+
+    if (MPI_Barrier(MPI_COMM_WORLD) != MPI_SUCCESS)
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    const double start = MPI_Wtime();
+    for (size_t iter = 1; iter &lt;= PR_MAX_ITERATIONS; ++iter) {
+        double local_dangling = 0.0, dangling = 0.0;
+        double local_error = 0.0, error = 0.0;
+        for (size_t v = begin; v &lt; end; ++v)
+            if (graph.out_degree[v] == 0) local_dangling += rank[v];
+        /* Collective order is identical on all ranks: dangling sum, rank
+         * all-gather, then global L1 sum. */
+        if (MPI_Allreduce(&amp;local_dangling, &amp;dangling, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD) != MPI_SUCCESS)
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        const double base = (1.0 - PR_DAMPING) / (double)graph.n +
+                            PR_DAMPING * dangling / (double)graph.n;
+        for (size_t v = begin; v &lt; end; ++v) {
+            double incoming = 0.0;
+            for (size_t p = graph.in_offsets[v]; p &lt; graph.in_offsets[v + 1]; ++p) {
+                const size_t src = (size_t)graph.in_sources[p];
+                incoming += rank[src] / (double)graph.out_degree[src];
+            }
+            local_values[v - begin] = base + PR_DAMPING * incoming;
+        }
+        /* Gather into a distinct receive vector (no overlapping MPI buffers),
+         * making all remote new ranks available for the next iteration. */
+        if (MPI_Allgatherv(local_values, (int)local_n, MPI_DOUBLE, next, counts,
+                           displacements, MPI_DOUBLE, MPI_COMM_WORLD) != MPI_SUCCESS)
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        for (size_t v = begin; v &lt; end; ++v)
+            local_error += next[v] &gt;= rank[v] ? next[v] - rank[v] : rank[v] - next[v];
+        if (MPI_Allreduce(&amp;local_error, &amp;error, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD) != MPI_SUCCESS)
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        final_error = error;
+        { double *tmp = rank; rank = next; next = tmp; }
+        iterations = iter;
+        if (error &lt; PR_TOLERANCE) { success = 1; break; }
+    }
+    {
+        const double local_elapsed = MPI_Wtime() - start;
+        double elapsed = 0.0;
+        if (MPI_Reduce(&amp;local_elapsed, &amp;elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        if (rank_id == 0)
+            pr_print_result(&amp;graph, iterations, elapsed, success, final_error,
+                            c.emit_ranks, rank);
+    }
+    free(rank); free(next); free(local_values); free(counts); free(displacements);
+    pr_graph_free(&amp;graph);
+    MPI_Finalize();
+    return success ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+</code></pre></section><section><h2>Recorded serial N=10 output — outputs/serial_output.txt, attempt 1</h2><p class="identity">Mohammed Ashar Husain — Roll No. 2024bcs0137</p><p>Actual captured stdout, selected from the saved output log; identity is this printed section label, not stdout.</p><pre><code>10,11,25,0.000001737,success,5.6465066086697213e-07
+ranks,0.21036722214068665,0.10830075012743358,0.21179967062274907,0.026924893717531297,0.018894662257914793,0.026924893717531297,0.12596441505274619,0.12596441505274619,0.12596441505274619,0.018894662257914793</code></pre></section><section><h2>Recorded MPI N=10 output — outputs/mpi_output.txt, 2 processes, attempt 3</h2><p class="identity">Mohammed Ashar Husain — Roll No. 2024bcs0137</p><p>Actual captured stdout, selected from the saved output log; identity is this printed section label, not stdout.</p><pre><code>10,11,25,0.000064743,success,5.6465066086697213e-07
+ranks,0.21036722214068665,0.10830075012743358,0.21179967062274907,0.026924893717531297,0.018894662257914793,0.026924893717531297,0.12596441505274619,0.12596441505274619,0.12596441505274619,0.018894662257914793</code></pre></section></body></html>

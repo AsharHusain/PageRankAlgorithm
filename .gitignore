@@ -1,0 +1,13 @@
+node_modules/
+__pycache__/
+.DS_Store
+
+# Compiled binaries
+bin/
+c/*.o
+
+# Large generated run logs and archives
+outputs/archive/
+outputs/serial_output.txt
+outputs/openmp_output.txt
+outputs/mpi_output.txt

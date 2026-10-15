@@ -1,0 +1,25 @@
+Machine: Linux-7.2.5-3-omarchy-x86_64-with-glibc2.44
+CPU model: Intel(R) Core(TM) Ultra 9 185H
+Architecture: x86_64
+Logical CPUs reported by Python: 22
+CPUs available to this process: 22
+GCC: gcc (GCC) 16.2.1 20260810
+MPI compiler: gcc (GCC) 16.2.1 20260810
+MPI launcher: mpirun (Open MPI) 5.0.10
+Root MPI override used: no
+Benchmark command: python3 scripts/benchmark.py (working directory /home/ash/Documents/College/Sem5/PADC/PageRank)
+Compilation commands:
+  gcc -O2 -std=c11 -Wall -Wextra -pedantic /home/ash/Documents/College/Sem5/PADC/PageRank/c/serial_pagerank.c -o /home/ash/Documents/College/Sem5/PADC/PageRank/outputs/bin/serial_pagerank
+  gcc -O2 -std=c11 -Wall -Wextra -pedantic -fopenmp /home/ash/Documents/College/Sem5/PADC/PageRank/c/openmp_pagerank.c -o /home/ash/Documents/College/Sem5/PADC/PageRank/outputs/bin/openmp_pagerank
+  mpicc -O2 -std=c11 -Wall -Wextra -pedantic /home/ash/Documents/College/Sem5/PADC/PageRank/c/mpi_pagerank.c -o /home/ash/Documents/College/Sem5/PADC/PageRank/outputs/bin/mpi_pagerank
+Timing scope: application-reported compute_elapsed; graph generation and process startup excluded.
+MPI timing is the maximum elapsed time across ranks.
+All executions use -O2 -std=c11 -Wall -Wextra -pedantic; OpenMP adds -fopenmp.
+Invocation patterns include --graph1, --graph2, --demo, --case CASE, and --emit-ranks.
+Demos: graph1 N=4 E=5; graph2 N=4 E=4; demo N=6 E=8.
+Cases: N10 (explicit fixture, E=11), N100 (E=594), N1000 (E=5994), N10000 (E=59995), N100000 (E=599992).
+Each configuration has one warmup and at least 5 successful timed readings; at most 10 timed attempts.
+Generated cases use affine pair(k)=((N+1)*k+17) mod N^2; offset/seed=17, self-loops skipped, directed pairs unique. N10 is an explicit E=11 fixture (seed not applicable).
+OpenMP threads: 1,2,4; MPI processes: 1,2,4.
+OpenMP environment: OMP_NUM_THREADS=worker count, OMP_DYNAMIC=FALSE; MPI root override is recorded above when used.
+Validation: finite ranks, rank sum within 1e-08, final L1 error < 1e-06; benchmark max rank delta <= 1e-08, demo delta <= 1e-10; Iterations may differ; rank vectors are compared by maximum absolute delta.

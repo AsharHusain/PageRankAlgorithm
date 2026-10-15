@@ -1,0 +1,475 @@
+<!doctype html><html><head><meta charset='utf-8'><title>Module III Print Packet</title><style>
+      @page { size: A4; margin: 17mm 15mm 18mm; @top-center { content: "Mohammed Ashar Husain | Roll No. 2024bcs0137"; font: 8pt Arial; color: #444; } }
+      body { font: 10pt Arial, sans-serif; color: #20252b; line-height: 1.35; }
+      h1 { font-size: 25pt; } h2 { font-size: 16pt; margin-bottom: 4pt; }
+      .identity { font-weight: bold; border-bottom: 1px solid #888; padding-bottom: 5pt; }
+      .cover { page-break-after: always; padding-top: 78mm; }
+      .code-section, .output-section, .summary-section { page-break-before: always; }
+      pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; font: 7pt/1.28 "DejaVu Sans Mono", monospace; background: #f1f3f5; padding: 7pt; }
+      pre.command { font-size: 7.5pt; } pre.output { font-size: 8pt; }
+      table { width: 100%; border-collapse: collapse; font-size: 8pt; margin: 10pt 0; }
+      th, td { border: 1px solid #777; padding: 5pt 4pt; text-align: left; overflow-wrap: anywhere; }
+      th { background: #e9edf1; } figure { margin: 15pt 0; text-align: center; }
+      img { max-width: 100%; max-height: 160mm; } figcaption { font-size: 8pt; }
+    </style></head><body>
+      <section class="cover"><h1>Module III — Printable Code &amp; Outputs Packet</h1>
+        <h2>Q9 / Q11 supporting material</h2><p class="identity">Mohammed Ashar Husain | Roll No. 2024bcs0137</p>
+        <p>Current MPI implementation, shared graph header, captured MPI results, current comparison summary, and graph.</p>
+        <p>This packet reproduces current project artifacts only. It does not claim historical Assignment 1 source or handwritten answers.</p>
+      </section>
+      <section class="code-section"><h2>Q9 — Current MPI source: c/mpi_pagerank.c</h2><p class="identity">Mohammed Ashar Husain | Roll No. 2024bcs0137</p><pre><code>#include &quot;shared_graph.h&quot;
+
+#include &lt;mpi.h&gt;
+
+int main(int argc, char **argv)
+{
+    int rank_id, world_size;
+    PRCase c;
+    PRGraph graph = {0};
+    double *rank = NULL, *next = NULL, *local_values = NULL;
+    double final_error = 0.0;
+    int *counts = NULL, *displacements = NULL;
+    size_t begin, end, local_n, iterations = 0;
+    int success = 0;
+
+    if (MPI_Init(&amp;argc, &amp;argv) != MPI_SUCCESS)
+        return EXIT_FAILURE;
+    if (MPI_Comm_rank(MPI_COMM_WORLD, &amp;rank_id) != MPI_SUCCESS ||
+        MPI_Comm_size(MPI_COMM_WORLD, &amp;world_size) != MPI_SUCCESS)
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    if (!pr_parse_case(argc, argv, &amp;c)) {
+        if (rank_id == 0) pr_usage(argv[0]);
+        MPI_Finalize();
+        return EXIT_FAILURE;
+    }
+    /* Replicated deterministic graph: each rank stores the same incoming CSR,
+     * and owns only a contiguous range of vertices for each update. */
+    if (!pr_graph_build(&amp;graph, &amp;c) || !pr_graph_valid(&amp;graph)) {
+        if (rank_id == 0) fprintf(stderr, &quot;Unable to construct graph\n&quot;);
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    }
+    if (world_size &lt;= 0 || graph.n &gt; (size_t)INT_MAX) {
+        if (rank_id == 0) fprintf(stderr, &quot;Graph partition exceeds MPI count limits\n&quot;);
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    }
+    begin = graph.n * (size_t)rank_id / (size_t)world_size;
+    end = graph.n * (size_t)(rank_id + 1) / (size_t)world_size;
+    local_n = end - begin;
+    rank = pr_initial_ranks(graph.n);
+    next = pr_rank_vector(graph.n);
+    local_values = local_n &gt; SIZE_MAX / sizeof(*local_values) ? NULL :
+        (double *)malloc((local_n == 0 ? 1 : local_n) * sizeof(*local_values));
+    if ((size_t)world_size &gt; SIZE_MAX / sizeof(*counts) ||
+        (size_t)world_size &gt; SIZE_MAX / sizeof(*displacements))
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    counts = (int *)malloc((size_t)world_size * sizeof(*counts));
+    displacements = (int *)malloc((size_t)world_size * sizeof(*displacements));
+    if (rank == NULL || next == NULL || local_values == NULL || counts == NULL || displacements == NULL) {
+        fprintf(stderr, &quot;Rank %d: unable to allocate rank vectors\n&quot;, rank_id);
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    }
+    for (int p = 0; p &lt; world_size; ++p) {
+        const size_t first = graph.n * (size_t)p / (size_t)world_size;
+        const size_t last = graph.n * (size_t)(p + 1) / (size_t)world_size;
+        if (last - first &gt; (size_t)INT_MAX || first &gt; (size_t)INT_MAX) {
+            if (rank_id == 0) fprintf(stderr, &quot;MPI count/displacement overflow\n&quot;);
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        }
+        counts[p] = (int)(last - first);
+        displacements[p] = (int)first;
+    }
+
+    if (MPI_Barrier(MPI_COMM_WORLD) != MPI_SUCCESS)
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    const double start = MPI_Wtime();
+    for (size_t iter = 1; iter &lt;= PR_MAX_ITERATIONS; ++iter) {
+        double local_dangling = 0.0, dangling = 0.0;
+        double local_error = 0.0, error = 0.0;
+        for (size_t v = begin; v &lt; end; ++v)
+            if (graph.out_degree[v] == 0) local_dangling += rank[v];
+        /* Collective order is identical on all ranks: dangling sum, rank
+         * all-gather, then global L1 sum. */
+        if (MPI_Allreduce(&amp;local_dangling, &amp;dangling, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD) != MPI_SUCCESS)
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        const double base = (1.0 - PR_DAMPING) / (double)graph.n +
+                            PR_DAMPING * dangling / (double)graph.n;
+        for (size_t v = begin; v &lt; end; ++v) {
+            double incoming = 0.0;
+            for (size_t p = graph.in_offsets[v]; p &lt; graph.in_offsets[v + 1]; ++p) {
+                const size_t src = (size_t)graph.in_sources[p];
+                incoming += rank[src] / (double)graph.out_degree[src];
+            }
+            local_values[v - begin] = base + PR_DAMPING * incoming;
+        }
+        /* Gather into a distinct receive vector (no overlapping MPI buffers),
+         * making all remote new ranks available for the next iteration. */
+        if (MPI_Allgatherv(local_values, (int)local_n, MPI_DOUBLE, next, counts,
+                           displacements, MPI_DOUBLE, MPI_COMM_WORLD) != MPI_SUCCESS)
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        for (size_t v = begin; v &lt; end; ++v)
+            local_error += next[v] &gt;= rank[v] ? next[v] - rank[v] : rank[v] - next[v];
+        if (MPI_Allreduce(&amp;local_error, &amp;error, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD) != MPI_SUCCESS)
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        final_error = error;
+        { double *tmp = rank; rank = next; next = tmp; }
+        iterations = iter;
+        if (error &lt; PR_TOLERANCE) { success = 1; break; }
+    }
+    {
+        const double local_elapsed = MPI_Wtime() - start;
+        double elapsed = 0.0;
+        if (MPI_Reduce(&amp;local_elapsed, &amp;elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD) != MPI_SUCCESS)
+            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+        if (rank_id == 0)
+            pr_print_result(&amp;graph, iterations, elapsed, success, final_error,
+                            c.emit_ranks, rank);
+    }
+    free(rank); free(next); free(local_values); free(counts); free(displacements);
+    pr_graph_free(&amp;graph);
+    MPI_Finalize();
+    return success ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+</code></pre></section>
+      <section class="code-section"><h2>Q9 — Shared implementation header: c/shared_graph.h</h2><p class="identity">Mohammed Ashar Husain | Roll No. 2024bcs0137</p><pre><code>#ifndef PAGERANK_SHARED_GRAPH_H
+#define PAGERANK_SHARED_GRAPH_H
+
+#include &lt;stddef.h&gt;
+#include &lt;stdint.h&gt;
+#include &lt;limits.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;stdlib.h&gt;
+#include &lt;string.h&gt;
+
+#define PR_DAMPING 0.85
+#define PR_TOLERANCE 1e-6
+#ifndef PR_MAX_ITERATIONS
+#define PR_MAX_ITERATIONS 10000
+#endif
+
+static uint64_t pr_mul_mod(uint64_t a, uint64_t b, uint64_t mod)
+{
+    uint64_t result = 0;
+    a %= mod;
+    while (b != 0) {
+        if (b &amp; 1U)
+            result = result &gt;= mod - a ? result - (mod - a) : result + a;
+        b &gt;&gt;= 1;
+        if (b != 0)
+            a = a &gt;= mod - a ? a - (mod - a) : a + a;
+    }
+    return result;
+}
+
+typedef struct {
+    size_t n;
+    size_t e;
+    size_t *in_offsets;
+    int *in_sources;
+    size_t *out_degree;
+} PRGraph;
+
+typedef struct {
+    size_t n;
+    size_t e;
+    int demo;
+    int emit_ranks;
+    int graph_kind;
+} PRCase;
+
+static int pr_graph_allocate(PRGraph *g, size_t n, size_t e)
+{
+    if (n == 0 || n &gt; (size_t)INT32_MAX || n == SIZE_MAX ||
+        n + 1 &gt; SIZE_MAX / sizeof(*g-&gt;in_offsets) ||
+        e &gt; SIZE_MAX / sizeof(*g-&gt;in_sources) ||
+        n &gt; SIZE_MAX / sizeof(*g-&gt;out_degree))
+        return 0;
+    g-&gt;n = n;
+    g-&gt;e = e;
+    g-&gt;in_offsets = (size_t *)calloc(n + 1, sizeof(*g-&gt;in_offsets));
+    g-&gt;in_sources = (int *)malloc((e == 0 ? 1 : e) * sizeof(*g-&gt;in_sources));
+    g-&gt;out_degree = (size_t *)calloc(n, sizeof(*g-&gt;out_degree));
+    if (g-&gt;in_offsets == NULL || g-&gt;in_sources == NULL || g-&gt;out_degree == NULL) {
+        free(g-&gt;in_offsets);
+        free(g-&gt;in_sources);
+        free(g-&gt;out_degree);
+        memset(g, 0, sizeof(*g));
+        return 0;
+    }
+    return 1;
+}
+
+/* A fixed affine permutation of all possible directed pairs makes generation
+ * reproducible and collision-free. Self loops are skipped; pairs are unique. */
+static int pr_graph_generate(PRGraph *g, size_t n, size_t wanted_edges)
+{
+    size_t made = 0;
+    size_t k = 0;
+    const uint64_t domain = (uint64_t)n * (uint64_t)n;
+    const uint64_t multiplier = (uint64_t)n + 1;
+
+    if (n == 0 || n &gt; (size_t)INT32_MAX ||
+        wanted_edges &gt; (uint64_t)n * (uint64_t)(n - 1))
+        return 0;
+    if (!pr_graph_allocate(g, n, wanted_edges))
+        return 0;
+
+    while (made &lt; wanted_edges) {
+        uint64_t pair = pr_mul_mod(multiplier, (uint64_t)k, domain);
+        const uint64_t offset = 17U % domain;
+        pair = pair &gt;= domain - offset ? pair - (domain - offset) : pair + offset;
+        const size_t src = (size_t)(pair / n);
+        const size_t dst = (size_t)(pair % n);
+        ++k;
+        if (src == dst)
+            continue;
+        ++g-&gt;in_offsets[dst + 1];
+        ++g-&gt;out_degree[src];
+        g-&gt;in_sources[made++] = (int)src;
+    }
+
+    for (size_t v = 0; v &lt; n; ++v)
+        g-&gt;in_offsets[v + 1] += g-&gt;in_offsets[v];
+
+    /* Fill CSR sources in destination order. Regenerate the same pair stream. */
+    {
+        size_t *cursor = (size_t *)malloc(n * sizeof(*cursor));
+        if (cursor == NULL) {
+            free(g-&gt;in_offsets);
+            free(g-&gt;in_sources);
+            free(g-&gt;out_degree);
+            memset(g, 0, sizeof(*g));
+            return 0;
+        }
+        memcpy(cursor, g-&gt;in_offsets, n * sizeof(*cursor));
+        made = 0;
+        k = 0;
+        while (made &lt; wanted_edges) {
+            uint64_t pair = pr_mul_mod(multiplier, (uint64_t)k, domain);
+            const uint64_t offset = 17U % domain;
+            pair = pair &gt;= domain - offset ? pair - (domain - offset) : pair + offset;
+            const size_t src = (size_t)(pair / n);
+            const size_t dst = (size_t)(pair % n);
+            ++k;
+            if (src != dst) {
+                g-&gt;in_sources[cursor[dst]++] = (int)src;
+                ++made;
+            }
+        }
+        free(cursor);
+    }
+    return 1;
+}
+
+static int pr_graph_from_edges(PRGraph *g, size_t n,
+                               const int (*edges)[2], size_t e)
+{
+    if (n == 0 || n &gt; (size_t)INT32_MAX)
+        return 0;
+    for (size_t i = 0; i &lt; e; ++i)
+        if (edges[i][0] &lt; 0 || edges[i][1] &lt; 0 ||
+            (size_t)edges[i][0] &gt;= n || (size_t)edges[i][1] &gt;= n)
+            return 0;
+    if (!pr_graph_allocate(g, n, e))
+        return 0;
+    for (size_t i = 0; i &lt; e; ++i) {
+        const size_t src = (size_t)edges[i][0];
+        const size_t dst = (size_t)edges[i][1];
+        ++g-&gt;in_offsets[dst + 1];
+        ++g-&gt;out_degree[src];
+    }
+    for (size_t v = 0; v &lt; n; ++v)
+        g-&gt;in_offsets[v + 1] += g-&gt;in_offsets[v];
+    {
+        size_t *cursor = (size_t *)malloc(n * sizeof(*cursor));
+        if (cursor == NULL) {
+            free(g-&gt;in_offsets);
+            free(g-&gt;in_sources);
+            free(g-&gt;out_degree);
+            memset(g, 0, sizeof(*g));
+            return 0;
+        }
+        memcpy(cursor, g-&gt;in_offsets, n * sizeof(*cursor));
+        for (size_t i = 0; i &lt; e; ++i) {
+            const size_t src = (size_t)edges[i][0];
+            const size_t dst = (size_t)edges[i][1];
+            g-&gt;in_sources[cursor[dst]++] = (int)src;
+        }
+        free(cursor);
+    }
+    return 1;
+}
+
+/* Six-node demo, with exact directed edges: 0-&gt;1, 0-&gt;2, 1-&gt;2, 2-&gt;0,
+ * 3-&gt;0, 3-&gt;2, 4-&gt;3, and 4-&gt;5. Node 5 is dangling. */
+static int pr_graph_demo(PRGraph *g)
+{
+    static const int edges[][2] = {
+        {0, 1}, {0, 2}, {1, 2}, {2, 0},
+        {3, 0}, {3, 2}, {4, 3}, {4, 5}
+    };
+    return pr_graph_from_edges(g, 6, edges, sizeof(edges) / sizeof(edges[0]));
+}
+
+static int pr_graph_n10(PRGraph *g)
+{
+    static const int edges[][2] = {
+        {0, 1}, {0, 2}, {1, 2}, {2, 0}, {3, 0}, {3, 2},
+        {4, 3}, {4, 5}, {6, 7}, {7, 8}, {8, 6}
+    };
+    return pr_graph_from_edges(g, 10, edges, sizeof(edges) / sizeof(edges[0]));
+}
+
+/* Four-node examples transcribed from the supplied PageRank PDF. */
+static int pr_graph1(PRGraph *g)
+{
+    static const int edges[][2] = {
+        {0, 1}, {0, 2}, {1, 3}, {2, 3}, {3, 0}
+    };
+    return pr_graph_from_edges(g, 4, edges, sizeof(edges) / sizeof(edges[0]));
+}
+
+static int pr_graph2(PRGraph *g)
+{
+    static const int edges[][2] = {
+        {0, 1}, {1, 2}, {2, 0}, {1, 3}
+    };
+    return pr_graph_from_edges(g, 4, edges, sizeof(edges) / sizeof(edges[0]));
+}
+
+static int pr_graph_build(PRGraph *g, const PRCase *c)
+{
+    switch (c-&gt;graph_kind) {
+    case 1: return pr_graph_demo(g);
+    case 2: return pr_graph1(g);
+    case 3: return pr_graph2(g);
+    case 4: return pr_graph_n10(g);
+    default: return pr_graph_generate(g, c-&gt;n, c-&gt;e);
+    }
+}
+
+static int pr_graph_valid(const PRGraph *g)
+{
+    if (g-&gt;n == 0 || g-&gt;n &gt; (size_t)INT32_MAX || g-&gt;in_offsets == NULL ||
+        g-&gt;in_sources == NULL || g-&gt;out_degree == NULL ||
+        g-&gt;in_offsets[0] != 0 || g-&gt;in_offsets[g-&gt;n] != g-&gt;e)
+        return 0;
+    for (size_t v = 0; v &lt; g-&gt;n; ++v)
+        if (g-&gt;in_offsets[v] &gt; g-&gt;in_offsets[v + 1] ||
+            g-&gt;in_offsets[v + 1] &gt; g-&gt;e)
+            return 0;
+    for (size_t p = 0; p &lt; g-&gt;e; ++p)
+        if (g-&gt;in_sources[p] &lt; 0 || (size_t)g-&gt;in_sources[p] &gt;= g-&gt;n ||
+            g-&gt;out_degree[g-&gt;in_sources[p]] == 0)
+            return 0;
+    return 1;
+}
+
+static void pr_graph_free(PRGraph *g)
+{
+    free(g-&gt;in_offsets);
+    free(g-&gt;in_sources);
+    free(g-&gt;out_degree);
+    memset(g, 0, sizeof(*g));
+}
+
+static int pr_parse_case(int argc, char **argv, PRCase *c)
+{
+    int selector_seen = 0;
+    c-&gt;demo = 0;
+    c-&gt;emit_ranks = 0;
+    c-&gt;graph_kind = 0;
+    c-&gt;n = 1000;
+    c-&gt;e = 5994;
+    for (int i = 1; i &lt; argc; ++i) {
+        if (strcmp(argv[i], &quot;--demo&quot;) == 0) {
+            if (selector_seen++) return 0;
+            c-&gt;demo = 1;
+            c-&gt;graph_kind = 1;
+        } else if (strcmp(argv[i], &quot;--graph1&quot;) == 0) {
+            if (selector_seen++) return 0;
+            c-&gt;demo = 0;
+            c-&gt;graph_kind = 2;
+        } else if (strcmp(argv[i], &quot;--graph2&quot;) == 0) {
+            if (selector_seen++) return 0;
+            c-&gt;demo = 0;
+            c-&gt;graph_kind = 3;
+        } else if (strcmp(argv[i], &quot;--emit-ranks&quot;) == 0) {
+            c-&gt;emit_ranks = 1;
+        } else if (strcmp(argv[i], &quot;--case&quot;) == 0 &amp;&amp; i + 1 &lt; argc) {
+            if (selector_seen++) return 0;
+            const char *name = argv[++i];
+            if (strcmp(name, &quot;N1&quot;) == 0) {
+                c-&gt;n = 1; c-&gt;e = 0;
+            } else if (strcmp(name, &quot;N10&quot;) == 0) {
+                c-&gt;n = 10; c-&gt;e = 11; c-&gt;graph_kind = 4;
+            } else if (strcmp(name, &quot;N100&quot;) == 0) {
+                c-&gt;n = 100; c-&gt;e = 594;
+            } else if (strcmp(name, &quot;N1000&quot;) == 0 || strcmp(name, &quot;small&quot;) == 0) {
+                c-&gt;n = 1000; c-&gt;e = 5994;
+            } else if (strcmp(name, &quot;N10000&quot;) == 0 || strcmp(name, &quot;medium&quot;) == 0) {
+                c-&gt;n = 10000; c-&gt;e = 59995;
+            } else if (strcmp(name, &quot;N100000&quot;) == 0 || strcmp(name, &quot;large&quot;) == 0) {
+                c-&gt;n = 100000; c-&gt;e = 599992;
+            } else {
+                return 0;
+            }
+        } else {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void pr_usage(const char *program)
+{
+    fprintf(stderr, &quot;Usage: %s [--demo | --graph1 | --graph2 | --case N1|N10|N100|N1000|N10000|N100000|small|medium|large] [--emit-ranks]\n&quot;, program);
+}
+
+static double *pr_initial_ranks(size_t n)
+{
+    if (n == 0 || n &gt; SIZE_MAX / sizeof(double))
+        return NULL;
+    double *ranks = (double *)malloc(n * sizeof(*ranks));
+    if (ranks != NULL)
+        for (size_t i = 0; i &lt; n; ++i)
+            ranks[i] = 1.0 / (double)n;
+    return ranks;
+}
+
+static double *pr_rank_vector(size_t n)
+{
+    return n == 0 || n &gt; SIZE_MAX / sizeof(double) ? NULL :
+           (double *)malloc(n * sizeof(double));
+}
+
+static void pr_print_result(const PRGraph *g, size_t iterations,
+                            double elapsed, int success, double final_error,
+                            int emit_ranks, const double *ranks)
+{
+    printf(&quot;%zu,%zu,%zu,%.9f,%s,%.17g\n&quot;, g-&gt;n, g-&gt;e, iterations, elapsed,
+           success ? &quot;success&quot; : &quot;max_iterations&quot;, final_error);
+    if (g-&gt;n &lt;= 6 &amp;&amp; !emit_ranks) {
+        printf(&quot;ranks&quot;);
+        for (size_t i = 0; i &lt; g-&gt;n; ++i)
+            printf(&quot;,%.12f&quot;, ranks[i]);
+        putchar(&#x27;\n&#x27;);
+    } else if (emit_ranks) {
+        printf(&quot;ranks&quot;);
+        for (size_t i = 0; i &lt; g-&gt;n; ++i)
+            printf(&quot;,%.17g&quot;, ranks[i]);
+        putchar(&#x27;\n&#x27;);
+    }
+}
+
+#endif
+</code></pre></section>
+      <section class="output-section"><h2>Recorded MPI N10 output</h2><p class="identity">Mohammed Ashar Husain | Roll No. 2024bcs0137</p><p><strong>Run:</strong> attempt 1; MPI processes: 2</p><p><strong>Recorded command:</strong></p><pre class="command"><code>mpirun -np 2 /home/ash/Documents/College/Sem5/PADC/PageRank/outputs/bin/mpi_pagerank --case N10 --emit-ranks</code></pre><p>Both the captured result row and all ten actual rank values are shown. Result and timing below are copied from captured stdout; identity is not inserted into program output.</p><pre class="output"><code>10,11,25,0.000069972,success,5.6465066086697213e-07
+ranks,0.21036722214068665,0.10830075012743358,0.21179967062274907,0.026924893717531297,0.018894662257914793,0.026924893717531297,0.12596441505274619,0.12596441505274619,0.12596441505274619,0.018894662257914793</code></pre></section>
+      <section class="output-section"><h2>Recorded MPI N1000 output</h2><p class="identity">Mohammed Ashar Husain | Roll No. 2024bcs0137</p><p><strong>Run:</strong> attempt 1; MPI processes: 2</p><p><strong>Recorded command:</strong></p><pre class="command"><code>mpirun -np 2 /home/ash/Documents/College/Sem5/PADC/PageRank/outputs/bin/mpi_pagerank --case N1000 --emit-ranks</code></pre><p>Only the captured result row is shown; the logged rank vector is intentionally omitted to avoid a large output listing. Result and timing below are copied from captured stdout; identity is not inserted into program output.</p><pre class="output"><code>1000,5994,43,0.000249514,success,8.8181541896921109e-07</code></pre></section>
+      <section class="output-section"><h2>Recorded MPI N100000 output</h2><p class="identity">Mohammed Ashar Husain | Roll No. 2024bcs0137</p><p><strong>Run:</strong> attempt 1; MPI processes: 2</p><p><strong>Recorded command:</strong></p><pre class="command"><code>mpirun -np 2 /home/ash/Documents/College/Sem5/PADC/PageRank/outputs/bin/mpi_pagerank --case N100000 --emit-ranks</code></pre><p>Only the captured result row is shown; the logged rank vector is intentionally omitted to avoid a large output listing. Result and timing below are copied from captured stdout; identity is not inserted into program output.</p><pre class="output"><code>100000,599992,16,0.006787760,success,9.6722143367025459e-07</code></pre></section>
+      <section class="summary-section"><h2>Q11 — Five-size execution-time comparison</h2>
+        <p class="identity">Mohammed Ashar Husain | Roll No. 2024bcs0137</p>
+        <p>Medians are read from summary rows in outputs/comparison.csv. Each summary is the median of five successful timed runs for that configuration (one warmup is excluded).</p>
+        <table><thead><tr><th>Case</th><th>N</th><th>E</th><th>Serial (median seconds)</th><th>OpenMP / 4 (median seconds)</th><th>MPI / 2 (median seconds)</th><th>MPI / 4 (median seconds)</th></tr></thead><tbody><tr><td>N10</td><td>10</td><td>11</td><td>1.587e-06</td><td>0.000554799</td><td>6.4743e-05</td><td>0.000138717</td></tr><tr><td>N100</td><td>100</td><td>594</td><td>8.7861e-05</td><td>0.001007639</td><td>0.000116308</td><td>0.000284884</td></tr><tr><td>N1000</td><td>1,000</td><td>5,994</td><td>0.000441013</td><td>0.001008721</td><td>0.000256088</td><td>0.000350771</td></tr><tr><td>N10000</td><td>10,000</td><td>59,995</td><td>0.001829857</td><td>0.00199082</td><td>0.001254603</td><td>0.001029242</td></tr><tr><td>N100000</td><td>100,000</td><td>599,992</td><td>0.009252197</td><td>0.008243165</td><td>0.006543447</td><td>0.005660108</td></tr></tbody></table><figure><img src="file:///home/ash/Documents/College/Sem5/PADC/PageRank/outputs/comparison.png" alt="Current PageRank runtime comparison graph"><figcaption>Current project graph from outputs/comparison.png (includes serial, OpenMP/4 and MPI/4 series).</figcaption></figure>
+      </section>
+    </body></html>

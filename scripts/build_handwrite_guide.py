@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Build a concise, typed A4 guide for copying Module III answers by hand."""
+
+from html import escape
+from pathlib import Path
+import subprocess
+
+ROOT = Path(__file__).resolve().parents[1]
+OUT = ROOT / "submission"
+HTML = OUT / "Module_III_Copy_by_Hand_Guide.html"
+PDF = OUT / "Module_III_Copy_by_Hand_Guide.pdf"
+
+
+def image(name, caption):
+    src = (ROOT / "docs/diagrams" / name).resolve().as_uri()
+    return f'<figure><img src="{src}" alt="{escape(caption)}"><figcaption>{escape(caption)} · reference to copy by hand</figcaption></figure>'
+
+
+def main():
+    source = (ROOT / "module3_handwrite.md").read_text(encoding="utf-8")
+    if not all(f"## Q{i}." in source for i in range(6, 12)):
+        raise RuntimeError("module3_handwrite.md must contain Q6–Q11")
+    sections = f'''
+<header><h1>Module III · MPI PageRank</h1><p class="identity">Mohammed Ashar Husain <span>Roll No. 2024bcs0137</span></p><p class="note">Copy-ready study guide · typed reference, not a handwritten submission</p></header>
+<section><h2>Q6 · Parallelizable blocks — Foster PCAM</h2>
+<p>Each destination update is independent within an iteration once current ranks and total dangling rank are known. Iterations depend on one another; all processes need the same convergence decision.</p>
+{image('pcam.svg','PCAM sequence and MPI collectives')}
+<p><b>Partition and mapping (N=10, P=4):</b> all processes store the same graph and full rank vector, but update only their contiguous range. Process 0: vertices 0–1 [0,2); process 1: 2–4 [2,5); process 2: 5–6 [5,7); process 3: 7–9 [7,10). The owner scans incoming CSR edges for its destinations.</p>
+</section>
+<section><h2>Q7 · MPI pseudocode</h2>
+{image('mpi_flow.svg','MPI PageRank iteration flow')}
+<pre>MPI_Init; get rank p and process count P
+Build and validate the same graph on every process
+Set owned range [begin,end); initialize ranks to 1/N
+MPI_Barrier; start = MPI_Wtime()
+for iteration = 1 .. 10,000:
+    local_dangling = sum owned dangling ranks
+    D = MPI_Allreduce(local_dangling, SUM)
+    base = (1-d)/N + d*D/N
+    update each owned destination using incoming edges
+    MPI_Allgatherv(next_local, next)
+    local_L1 = sum owned |next[v]-rank[v]|
+    L1 = MPI_Allreduce(local_L1, SUM); swap(rank,next)
+    if L1 &lt; 1e-6: break
+local_elapsed = MPI_Wtime() - start
+MPI_Reduce(local_elapsed, MAX, root=0)
+Rank 0 prints result; free memory; MPI_Finalize</pre>
+</section>
+<section><h2>Q8 · N10 demonstration — first iteration</h2>
+<p>The graph has N=10, E=11. Vertex 5 has no outgoing edge; vertex 9 is isolated. Separate clusters are not connected.</p>
+{image('n10_graph.svg','Exact directed N10 graph')}
+<p class="edges"><b>Edges:</b> 0→1, 0→2, 1→2, 2→0, 3→0, 3→2, 4→3, 4→5, 6→7, 7→8, 8→6.</p>
+<p>With four processes, every initial rank is 0.1. Local dangling ranks by process are 0, 0, 0.1 (vertex 5), and 0.1 (vertex 9); total D=0.2. Thus base=(1−0.85)/10+0.85×0.2/10=0.032.</p>
+<p>Examples: next[0]=0.032+0.85(0.1/1+0.1/2)=0.1595; next[2]=0.032+0.85(0.1/2+0.1/1+0.1/2)=0.2020.</p>
+<p>The gathered next ranks, vertex order: <code>.1595, .0745, .2020, .0745, .0320, .0745, .1170, .1170, .1170, .0320</code>. Global L1 change=0.425, so continue. Actual one-iteration capped output: <code>10,11,1,0.000027189,max_iterations,0.42499999999999999</code>. It is not converged.</p>
+</section>
+<section><h2>Q9 · MPI source, run and actual output</h2>
+<p>Source: <code>c/mpi_pagerank.c</code>; graph, N10 fixture and constants: <code>c/shared_graph.h</code>.</p>
+<pre>mpicc -O2 -std=c11 -Wall -Wextra -pedantic c/mpi_pagerank.c -o outputs/bin/mpi_pagerank
+mpirun -np 2 outputs/bin/mpi_pagerank --case N10 --emit-ranks</pre>
+<p>Actual converged MPI/2 result row from <code>outputs/mpi_output.txt</code>:</p><p class="result">10,11,25,0.000064743,success,5.6465066086697213e-07</p>
+<p>Columns are N, E, iterations, seconds, status, final L1 error. A separate <code>ranks,...</code> row lists ranks in vertex order. For the hardcopy, attach the printed full source and output, labelled with the name and roll number above; those identifiers are not program output. The assignment PDF's Q9a says “OpenMP” despite its MPI heading; this answer follows the heading.</p>
+</section>
+<section><h2>Q10 · Time and space complexity</h2>
+<p>Let N be vertices, E edges, I iterations, P processes. Serial work is O(I(N+E)); balanced MPI computation is approximately O(I(N+E)/P) per process. Each iteration adds two scalar Allreduces and an Allgatherv of N ranks to every process. Imbalance and communication can limit speedup.</p>
+<p>Each process stores replicated CSR and full rank vectors: O(N+E) memory per process, O(P(N+E)) total. The graph is not distributed. Timing starts after a barrier, before the loop; reported elapsed time is the maximum across processes.</p>
+</section>
+<section><h2>Q11 · Execution-time comparison</h2>
+<p>Median seconds from five timed readings per configuration. OpenMP/4 means four threads; MPI/2 and MPI/4 mean two and four processes. Copy the table by hand. Attach the actual comparison graph from the separate print packet; if drawing it, label the horizontal axis N and the vertical axis median seconds (log scale).</p>
+<table><thead><tr><th>N (E)</th><th>Serial</th><th>OpenMP/4</th><th>MPI/2</th><th>MPI/4</th></tr></thead><tbody>
+<tr><td>10 (11)</td><td>1.587e−6</td><td>5.548e−4</td><td>6.474e−5</td><td>1.387e−4</td></tr>
+<tr><td>100 (594)</td><td>8.786e−5</td><td>1.008e−3</td><td>1.163e−4</td><td>2.849e−4</td></tr>
+<tr><td>1,000 (5,994)</td><td>4.410e−4</td><td>1.009e−3</td><td>2.561e−4</td><td>3.508e−4</td></tr>
+<tr><td>10,000 (59,995)</td><td>1.830e−3</td><td>1.991e−3</td><td>1.255e−3</td><td>1.029e−3</td></tr>
+<tr><td>100,000 (599,992)</td><td>9.252e−3</td><td>8.243e−3</td><td>6.543e−3</td><td>5.660e−3</td></tr>
+</tbody></table>
+<p>At N=100,000, MPI/4 speedup=0.009252/0.005660=1.635×; efficiency=1.635/4=0.409 (about 40.9%). Small graphs may run slower in parallel because overhead exceeds saved computation. Results are machine-specific, not universal.</p>
+</section>'''
+    OUT.mkdir(exist_ok=True)
+    style = '''@page{size:A4 portrait;margin:16mm 17mm 17mm;@top-right{content:"2024bcs0137";font:8pt Georgia;color:#444}}*{box-sizing:border-box}body{font:10pt/1.42 Georgia,"Times New Roman",serif;color:#111}header{border-bottom:2px solid #111;margin-bottom:12pt}h1{font-size:25pt;margin:0 0 5pt}h2{font-size:16pt;margin:0 0 8pt;border-bottom:1px solid #555;padding-bottom:3pt}section{page-break-before:always;break-before:page}section:first-of-type{page-break-before:auto;break-before:auto}.identity{font-weight:bold;font-size:12pt;margin:5pt 0}.identity span{float:right}.note{font-size:9pt;color:#333;margin:4pt 0 10pt}p{margin:6pt 0}figure{margin:8pt auto;text-align:center;page-break-inside:avoid;break-inside:avoid}img{max-width:100%;max-height:128mm;object-fit:contain}figcaption{font-size:8pt;margin-top:3pt}pre{white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid #555;padding:7pt;font:8pt/1.35 "DejaVu Sans Mono",monospace}code{font:0.9em "DejaVu Sans Mono",monospace;overflow-wrap:anywhere}.edges{border:1px solid #555;padding:6pt}.result{text-align:center;font-weight:bold;font-family:monospace;font-size:10pt}table{width:100%;border-collapse:collapse;font:9pt "DejaVu Sans Mono",monospace;margin:8pt 0}th,td{border:1px solid #222;padding:5pt 4pt;text-align:right}th{font: bold 9pt Georgia;background:#eee}td:first-child,th:first-child{text-align:left}tr{break-inside:avoid}'''
+    HTML.write_text(f'<!doctype html><html><head><meta charset="utf-8"><title>Module III Copy-by-Hand Guide</title><style>{style}</style></head><body>{sections}</body></html>', encoding="utf-8")
+    subprocess.run(["/usr/bin/chromium", "--headless", "--no-sandbox", "--disable-gpu", "--allow-file-access-from-files", "--no-pdf-header-footer", f"--print-to-pdf={PDF}", HTML.resolve().as_uri()], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print(f"Wrote {HTML}\nWrote {PDF}")
+
+
+if __name__ == "__main__":
+    main()
